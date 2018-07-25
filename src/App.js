@@ -23,7 +23,7 @@ class App extends React.Component{
     if(city && country){
       if(data.cod !== '404'){
         this.setState({
-          temperature: data.main.temp,
+          temperature: Math.round( (data.main.temp - 273.15) * 10 ) / 10,
           humidity: data.main.humidity,
           description: data.weather[0].description,
           city: data.name,
