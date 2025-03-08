@@ -6,6 +6,7 @@ on:
       - opened      # Triggers when a PR is opened
       - reopened    # Triggers when a PR is reopened
       - synchronize # Triggers when a commit is pushed to the PR
+permissions:
   pull-requests: write
 jobs:
   setup-deepseek-review:
