@@ -18,6 +18,136 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tool_name: AI Code Review
+          
+      - name: Generate AI PR Summary
+        uses: actions/github-script@v6
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.issue.number;
+            
+            // Get PR details
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber
+            });
+            
+            // Get PR files
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner,
+              repo,
+              pull_number: prNumber
+            });
+            
+            // Get PR diff
+            const diff = pullRequest.diff_url ? 
+              await fetch(pullRequest.diff_url).then(res => res.text()) : 
+              "No diff available";
+            
+            // Function to call OpenAI API
+            async function callOpenAI(prompt) {
+              const openaiApiKey = process.env.OPENAI_API_KEY;
+              if (!openaiApiKey) {
+                console.log("OpenAI API key not found");
+                return "OpenAI API key not provided. Please add OPENAI_API_KEY to your repository secrets.";
+              }
+              
+              try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${openaiApiKey}`
+                  },
+                  body: JSON.stringify({
+                    model: "gpt-4",
+                    messages: [
+                      {
+                        role: "system",
+                        content: "You are a helpful code reviewer. Analyze the provided PR diff and generate a concise, insightful summary of the changes."
+                      },
+                      {
+                        role: "user",
+                        content: prompt
+                      }
+                    ],
+                    max_tokens: 1000
+                  })
+                });
+                
+                const data = await response.json();
+                return data.choices[0].message.content;
+              } catch (error) {
+                console.error("Error calling OpenAI API:", error);
+                return "Error generating AI summary. Please check the workflow logs.";
+              }
+            }
+            
+            // Basic stats for the summary
+            const fileStats = {
+              totalFiles: files.length,
+              totalAdditions: files.reduce((sum, file) => sum + file.additions, 0),
+              totalDeletions: files.reduce((sum, file) => sum + file.deletions, 0),
+              fileChanges: files.map(file => `- ${file.filename}: ${file.additions} additions, ${file.deletions} deletions`).join('\n')
+            };
+            
+            // Create prompt for OpenAI
+            const prompt = `
+            Analyze this Pull Request and provide a concise, insightful summary:
+            
+            PR Title: ${pullRequest.title}
+            PR Description: ${pullRequest.body || "No description provided"}
+            
+            Files changed: ${fileStats.totalFiles}
+            Total additions: ${fileStats.totalAdditions}
+            Total deletions: ${fileStats.totalDeletions}
+            
+            Modified files:
+            ${fileStats.fileChanges}
+            
+            Diff:
+            ${diff.length > 8000 ? diff.substring(0, 8000) + "... (truncated)" : diff}
+            
+            Please provide:
+            1. A concise summary of the changes
+            2. Key points about the implementation
+            3. Any potential issues or suggestions for improvement
+            4. Overall assessment of the code quality
+            `;
+            
+            // Get AI-generated summary
+            const aiSummary = await callOpenAI(prompt);
+            
+            // Create final comment
+            const summary = `## 🤖 AI PR Summary
+            
+            **PR Title:** ${pullRequest.title}
+            
+            **Changes Overview:**
+            - Total files changed: ${fileStats.totalFiles}
+            - Total additions: ${fileStats.totalAdditions}
+            - Total deletions: ${fileStats.totalDeletions}
+            
+            ---
+            
+            ${aiSummary}
+            
+            ---
+            
+            *This summary was generated automatically by AI based on the code changes in this PR.*
+            `;
+            
+            // Post comment
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prNumber,
+              body: summary
+            });
 
       # If you specifically want an OpenAI-based code reviewer, you can use this alternative:
       # - name: AI Code Reviewer
