@@ -8,12 +8,13 @@ on:
       - synchronize # Triggers when a commit is pushed to the PR
 permissions:
   pull-requests: write
+  contents: read    # Add this permission for reading repository contents
 jobs:
   setup-deepseek-review:
     runs-on: ubuntu-latest
     name: Code Review
     steps:
       - name: DeepSeek Code Review
-        uses: hustcer/deepseek-review@v1
+        uses: hustcer/deepseek-review@v1.12  # Use the latest specific version
         with:
           chat-token: ${{ secrets.CHAT_TOKEN }}
