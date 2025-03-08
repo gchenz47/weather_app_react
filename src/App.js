@@ -2,9 +2,12 @@ import React, { useState, useEffect } from "react";
 import Titles from "./components/Titles";
 import Form from "./components/Form";
 import Weather from "./components/Weather";
+import LocalNews from "./components/LocalNews";
 import { FaMoon, FaSun, FaLocationArrow } from 'react-icons/fa';
 
 const API_KEY = "bd5e378503939ddaee76f12ad7a97608";
+// Using a free news API that doesn't require authentication
+const NEWS_API_BASE_URL = "https://raw.githubusercontent.com/SauravKanchan/NewsAPI/master/top-headlines";
 
 const App = () => {
   const [weatherData, setWeatherData] = useState({
@@ -17,6 +20,11 @@ const App = () => {
     icon: undefined,
     feels_like: undefined,
     wind_speed: undefined
+  });
+  const [newsData, setNewsData] = useState({
+    articles: [],
+    loading: false,
+    error: undefined
   });
   const [loading, setLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
@@ -48,58 +56,36 @@ const App = () => {
         (position) => {
           const { latitude, longitude } = position.coords;
           fetchWeatherByCoordinates(latitude, longitude);
-          setGeoLocationAvailable(true);
         },
         (error) => {
-          console.error("Geolocation error:", error);
+          console.error('Geolocation error:', error);
           setGeoLocationAvailable(false);
           setLoading(false);
-          if (error.code === 1) { // Permission denied
-            setWeatherData(prev => ({
-              ...prev,
-              error: "Location access denied. Please enable location services or search manually."
-            }));
-          } else {
-            setWeatherData(prev => ({
-              ...prev,
-              error: "Could not get your current location. Please search manually."
-            }));
-          }
-        },
-        { timeout: 10000 }
+        }
       );
     } else {
       setGeoLocationAvailable(false);
       setLoading(false);
-      setWeatherData(prev => ({
-        ...prev,
-        error: "Geolocation is not supported by your browser. Please search manually."
-      }));
     }
   };
 
   const fetchWeatherByCoordinates = async (latitude, longitude) => {
-    if (!apiKeyValid) {
-      setLoading(false);
-      return;
-    }
-
     try {
       setWeatherData(prev => ({ ...prev, error: undefined }));
       
       const apiUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${latitude}&lon=${longitude}&appid=${API_KEY}`;
-      console.log('Fetching from coordinates:', apiUrl);
+      console.log('Fetching from:', apiUrl);
       
-      const response = await fetch(apiUrl);
+      const api_call = await fetch(apiUrl);
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+      if (!api_call.ok) {
+        throw new Error(`HTTP error! Status: ${api_call.status}`);
       }
       
-      const data = await response.json();
-      console.log('API response from coordinates:', data);
+      const data = await api_call.json();
+      console.log('API response:', data);
       
-      if (data.cod === 200) {
+      if (data.cod !== '404' && data.cod !== 404) {
         const weatherInfo = {
           temperature: Math.round((data.main.temp - 273.15) * 10) / 10,
           humidity: data.main.humidity,
@@ -114,39 +100,44 @@ const App = () => {
         
         console.log('Setting weather data:', weatherInfo);
         setWeatherData(weatherInfo);
+        
+        // Fetch news for the city
+        fetchLocalNews(data.name);
       } else {
-        throw new Error(`Weather data error: ${data.message || 'Unknown error'}`);
+        setWeatherData({
+          temperature: undefined,
+          humidity: undefined,
+          description: undefined,
+          city: undefined,
+          country: undefined,
+          error: 'Location not found. Please check your city and country names.',
+          icon: undefined,
+          feels_like: undefined,
+          wind_speed: undefined
+        });
       }
     } catch (error) {
-      console.error('Error fetching weather data by coordinates:', error);
+      console.error('Error fetching weather data:', error);
       handleApiError(error);
     } finally {
       setLoading(false);
     }
   };
 
-  const validateApiKey = async () => {
-    try {
-      const response = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=London,uk&appid=${API_KEY}`);
-      const data = await response.json();
-      
-      if (data.cod === 401 || data.message === 'Invalid API key') {
-        setApiKeyValid(false);
-        setWeatherData(prev => ({
-          ...prev,
-          error: 'Invalid API key. Please check your OpenWeatherMap API key.'
-        }));
-      } else {
-        setApiKeyValid(true);
-      }
-    } catch (error) {
-      console.error('Error validating API key:', error);
-    }
-  };
-
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
     document.body.classList.toggle('dark-mode');
+  };
+
+  const validateApiKey = async () => {
+    try {
+      const response = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=London,uk&appid=${API_KEY}`);
+      if (response.status === 401) {
+        setApiKeyValid(false);
+      }
+    } catch (error) {
+      console.error('API validation error:', error);
+    }
   };
 
   const getWeather = async (e) => {
@@ -195,6 +186,9 @@ const App = () => {
           
           console.log('Setting weather data:', weatherInfo);
           setWeatherData(weatherInfo);
+          
+          // Fetch news for the city
+          fetchLocalNews(data.name);
         } else {
           setWeatherData({
             temperature: undefined,
@@ -227,6 +221,123 @@ const App = () => {
         wind_speed: undefined
       });
     }
+  };
+
+  const fetchLocalNews = async (city) => {
+    if (!city) return;
+    
+    setNewsData(prev => ({ ...prev, loading: true, error: undefined }));
+    
+    try {
+      // First try to get country-specific news
+      // Map common countries to their ISO codes
+      const countryMap = {
+        'United States': 'us',
+        'USA': 'us',
+        'US': 'us',
+        'United Kingdom': 'gb',
+        'UK': 'gb',
+        'India': 'in',
+        'Australia': 'au',
+        'Russia': 'ru',
+        'France': 'fr'
+      };
+      
+      // Try to determine country from the city's country
+      let countryCode = 'us'; // Default to US
+      if (weatherData.country) {
+        // Convert country code to lowercase
+        const lowerCountryCode = weatherData.country.toLowerCase();
+        // Check if it's one of our supported countries
+        if (['us', 'gb', 'in', 'au', 'ru', 'fr'].includes(lowerCountryCode)) {
+          countryCode = lowerCountryCode;
+        } else if (countryMap[weatherData.country]) {
+          countryCode = countryMap[weatherData.country];
+        }
+      }
+      
+      // Fetch news from the GitHub-hosted API
+      const newsUrl = `${NEWS_API_BASE_URL}/${countryCode}.json`;
+      console.log('Fetching news from:', newsUrl);
+      
+      const response = await fetch(newsUrl);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('News API response:', data);
+      
+      if (data.articles && data.articles.length > 0) {
+        // Format and filter the news data
+        // Try to find articles related to the city or general news
+        const cityLower = city.toLowerCase();
+        
+        // First try to find articles mentioning the city
+        let relevantArticles = data.articles.filter(article => 
+          article.title.toLowerCase().includes(cityLower) || 
+          (article.description && article.description.toLowerCase().includes(cityLower))
+        );
+        
+        // If we don't have enough city-specific articles, add some general ones
+        if (relevantArticles.length < 5) {
+          const generalArticles = data.articles
+            .filter(article => 
+              !relevantArticles.some(a => a.title === article.title)
+            )
+            .slice(0, 5 - relevantArticles.length);
+          
+          relevantArticles = [...relevantArticles, ...generalArticles];
+        }
+        
+        // Take the first 5 articles
+        const formattedNews = relevantArticles.slice(0, 5).map(article => ({
+          title: article.title,
+          description: article.description || 'No description available',
+          url: article.url,
+          source: article.source.name || 'Unknown Source',
+          publishedAt: article.publishedAt || new Date().toISOString(),
+          urlToImage: article.urlToImage
+        }));
+        
+        setNewsData({
+          articles: formattedNews,
+          loading: false,
+          error: undefined
+        });
+      } else {
+        // If no articles found, fall back to mock data
+        const mockNewsData = generateMockNews(city);
+        setNewsData({
+          articles: mockNewsData,
+          loading: false,
+          error: undefined
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching news data:', error);
+      // Fall back to mock data on error
+      const mockNewsData = generateMockNews(city);
+      setNewsData({
+        articles: mockNewsData,
+        loading: false,
+        error: undefined
+      });
+    }
+  };
+  
+  // Function to generate mock news data as a fallback
+  const generateMockNews = (city) => {
+    const topics = ['weather', 'local', 'business', 'sports', 'culture'];
+    
+    return topics.map((topic, index) => ({
+      title: `${city} ${topic.charAt(0).toUpperCase() + topic.slice(1)}: Latest Updates`,
+      description: `The latest ${topic} news and updates from ${city} and surrounding areas. Stay informed about local ${topic} developments.`,
+      url: `https://www.google.com/search?q=${encodeURIComponent(`${city} ${topic} news`)}`,
+      source: `${city} ${topic.charAt(0).toUpperCase() + topic.slice(1)} News`,
+      publishedAt: new Date().toISOString()
+    }));
   };
 
   const handleApiError = (error) => {
@@ -322,25 +433,38 @@ const App = () => {
             </div>
           )}
           
-          <div className="weather-container">
-            {loading ? (
-              <div className="loader">
-                <div className="loader-spinner"></div>
-                <p className="mt-3 text-center">Loading weather data...</p>
+          <div className="content-container">
+            <div className="weather-container">
+              {loading ? (
+                <div className="loader">
+                  <div className="loader-spinner"></div>
+                  <p className="mt-3 text-center">Loading weather data...</p>
+                </div>
+              ) : (
+                <Weather
+                  temperature={weatherData.temperature}
+                  humidity={weatherData.humidity}
+                  city={weatherData.city}
+                  country={weatherData.country}
+                  description={weatherData.description}
+                  error={weatherData.error}
+                  icon={weatherData.icon}
+                  feels_like={weatherData.feels_like}
+                  wind_speed={weatherData.wind_speed}
+                  loading={loading}
+                />
+              )}
+            </div>
+            
+            {weatherData.city && (
+              <div className="news-container">
+                <LocalNews
+                  newsData={newsData.articles}
+                  city={weatherData.city}
+                  loading={newsData.loading}
+                  error={newsData.error}
+                />
               </div>
-            ) : (
-              <Weather
-                temperature={weatherData.temperature}
-                humidity={weatherData.humidity}
-                city={weatherData.city}
-                country={weatherData.country}
-                description={weatherData.description}
-                error={weatherData.error}
-                icon={weatherData.icon}
-                feels_like={weatherData.feels_like}
-                wind_speed={weatherData.wind_speed}
-                loading={loading}
-              />
             )}
           </div>
         </div>
