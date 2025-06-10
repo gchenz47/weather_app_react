@@ -9,7 +9,7 @@ const Form = ({ getWeather }) => {
     e.preventDefault();
     getWeather(e);
   };
-
+ 
   return (
     <form onSubmit={handleSubmit}>
       <h4 className="mb-3">Search Location</h4>
